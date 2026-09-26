@@ -111,25 +111,25 @@ def extract_blocking_keys(row: pd.Series) -> set:
     name_tokens = norm_name.split()
     addr_tokens = norm_address.split()
     
-    # Strategy 1: Exact Name Match
-    if norm_name:
-        keys.add(f"NAME_{norm_name}")
+    # Filter out very short tokens (like 'and', 'co') for blocking
+    sig_name_tokens = [t for t in name_tokens if len(t) > 2]
+    
+    # Strategy 1: Every significant token in the name is a key
+    for t in sig_name_tokens:
+        keys.add(f"TK_{t}")
         
-    # Strategy 2: First 2 tokens of name + First token of address (if available)
-    if len(name_tokens) >= 1:
-        first_n = "_".join(name_tokens[:2])
-        if addr_tokens:
-            keys.add(f"N_{first_n}_A_{addr_tokens[0]}")
-        else:
-            keys.add(f"N_{first_n}")
+    # Strategy 2: First 4 characters of the longest word in the name
+    if sig_name_tokens:
+        longest_name_token = max(sig_name_tokens, key=len)
+        if len(longest_name_token) >= 4:
+            keys.add(f"L4_{longest_name_token[:4]}")
             
-    # Strategy 3: Significant tokens (longest word in name + first word of address)
+    # Strategy 3: Initials of the name (to catch acronyms)
     if name_tokens:
-        longest_name_token = max(name_tokens, key=len)
-        if len(longest_name_token) > 3: # Only consider it if it's somewhat unique
-            if addr_tokens:
-                 keys.add(f"LN_{longest_name_token}_A_{addr_tokens[0]}")
-                 
+        initials = "".join([t[0] for t in name_tokens if t])
+        if len(initials) >= 3:
+            keys.add(f"IN_{initials}")
+
     return keys
 
 def generate_blocking_keys(df: pd.DataFrame) -> pd.DataFrame:
@@ -209,11 +209,11 @@ if __name__ == "__main__":
     # To do the full recall audit, we need the full dataset.
     # s1, s2, s3, gt = load_and_verify_data(DATASET_DIR, prefix='train')
     
-    # We will just print the schema test first
-    s1_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_source1.tsv'), sep='\t', nrows=5)
-    s2_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_source2.tsv'), sep='\t', nrows=5)
-    s3_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_source3.tsv'), sep='\t', nrows=5)
-    gt_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_ground_truth.tsv'), sep='\t', nrows=5)
+    # We will run a 50,000 row test to establish a baseline recall ceiling
+    s1_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_source1.tsv'), sep='\t', nrows=50000)
+    s2_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_source2.tsv'), sep='\t', nrows=50000)
+    s3_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_source3.tsv'), sep='\t', nrows=50000)
+    gt_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_ground_truth.tsv'), sep='\t', nrows=50000)
     
     print("S1 schema:", s1_test.columns.tolist())
     print("S2 schema:", s2_test.columns.tolist())
@@ -227,6 +227,7 @@ if __name__ == "__main__":
     
     print("\nGenerating candidates...")
     candidates = generate_candidate_pairs(s1_test, s2_test, s3_test)
-    print(candidates.head())
+    print("\nEvaluating Blocking Strategy...")
+    evaluate_blocking_recall(candidates, gt_test)
     
     print("\nPipeline check completed successfully.")
