@@ -133,13 +133,23 @@ def extract_blocking_keys(row: pd.Series) -> set:
     return keys
 
 def generate_blocking_keys(df: pd.DataFrame) -> pd.DataFrame:
-    """Generate multiple blocking keys per entity."""
+    """Generate multiple blocking keys per entity, and filter out massive generic blocks."""
     records = []
     for _, row in df.iterrows():
         keys = extract_blocking_keys(row)
         for k in keys:
             records.append({'entity_id': row['entity_id'], 'blocking_key': k})
-    return pd.DataFrame(records)
+            
+    keys_df = pd.DataFrame(records)
+    
+    # Filter out blocks that are too large (e.g. > 500 entities) to prevent OOM
+    # and keep the candidate_size small for our score.
+    if not keys_df.empty:
+        counts = keys_df['blocking_key'].value_counts()
+        valid_keys = counts[counts <= 500].index
+        keys_df = keys_df[keys_df['blocking_key'].isin(valid_keys)]
+        
+    return keys_df
 
 def generate_candidate_pairs(s1: pd.DataFrame, s2: pd.DataFrame, s3: pd.DataFrame) -> pd.DataFrame:
     """
@@ -209,11 +219,11 @@ if __name__ == "__main__":
     # To do the full recall audit, we need the full dataset.
     # s1, s2, s3, gt = load_and_verify_data(DATASET_DIR, prefix='train')
     
-    # We will run a 50,000 row test to establish a baseline recall ceiling
-    s1_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_source1.tsv'), sep='\t', nrows=50000)
-    s2_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_source2.tsv'), sep='\t', nrows=50000)
-    s3_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_source3.tsv'), sep='\t', nrows=50000)
-    gt_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_ground_truth.tsv'), sep='\t', nrows=50000)
+    # We will run the full validation split to hand off to Person B
+    s1_test = pd.read_csv(os.path.join(DATASET_DIR, 'split', 'val', 'train_source1.tsv'), sep='\t')
+    s2_test = pd.read_csv(os.path.join(DATASET_DIR, 'split', 'val', 'train_source2.tsv'), sep='\t')
+    s3_test = pd.read_csv(os.path.join(DATASET_DIR, 'split', 'val', 'train_source3.tsv'), sep='\t')
+    gt_test = pd.read_csv(os.path.join(DATASET_DIR, 'split', 'val', 'train_ground_truth.tsv'), sep='\t')
     
     print("S1 schema:", s1_test.columns.tolist())
     print("S2 schema:", s2_test.columns.tolist())
@@ -230,4 +240,8 @@ if __name__ == "__main__":
     print("\nEvaluating Blocking Strategy...")
     evaluate_blocking_recall(candidates, gt_test)
     
-    print("\nPipeline check completed successfully.")
+    # Export to output for the matcher to use
+    output_path = "output/candidate_pairs.tsv"
+    os.makedirs("output", exist_ok=True)
+    candidates.to_csv(output_path, sep='\t', index=False)
+    print(f"\nSuccessfully generated {output_path}!")
