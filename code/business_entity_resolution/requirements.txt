@@ -1,2 +1,2 @@
-pandas
-rapidfuzz
+pandas==3.0.2
+rapidfuzz>=3.0.0
