@@ -1,16 +1,43 @@
+import os
+import pickle
+import pandas as pd
+
 class Matcher:
     """
     Predicts match / no-match per candidate pair.
     Precision-first: calibrated to avoid false merges (F0.5 penalizes false positives 2x).
+    Supports falling back to a rules-based threshold if no ML model is trained.
     """
-    def __init__(self, threshold=0.83):
-        # We start with a high threshold. You should tune this on train_ground_truth.tsv!
+    def __init__(self, model_path="models/matcher_xgb.pkl", threshold=0.83):
+        self.model = None
         self.threshold = threshold
         
+        # Adjust relative path if needed
+        if not os.path.exists(model_path) and os.path.exists("../../" + model_path):
+            model_path = "../../" + model_path
+            
+        if os.path.exists(model_path):
+            print(f"Loading ML Model from {model_path}...")
+            with open(model_path, 'rb') as f:
+                data = pickle.load(f)
+                self.model = data['model']
+                self.threshold = data['threshold']
+        else:
+            print(f"No ML model found at {model_path}, falling back to rules-based matcher (threshold={self.threshold}).")
+            
     def predict(self, features):
         """
         Returns True if the candidate is a match, False otherwise.
         """
+        if self.model is not None:
+            # Predict using XGBoost
+            df = pd.DataFrame([features])
+            # The model predicts probability of class 1
+            prob = self.model.predict_proba(df)[0][1]
+            return prob >= self.threshold
+            
+        # --- Fallback Rules-based Logic ---
+        
         # Name score computation
         # Token set ratio handles word reorderings (e.g. "Amazon Inc" vs "Inc Amazon") very well
         name_score = (
