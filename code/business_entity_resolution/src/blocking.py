@@ -133,42 +133,62 @@ def extract_blocking_keys(row: pd.Series) -> set:
     return keys
 
 def generate_blocking_keys(df: pd.DataFrame) -> pd.DataFrame:
-    """Generate multiple blocking keys per entity."""
+    """Generate multiple blocking keys per entity with memory efficiency."""
     records = []
-    for _, row in df.iterrows():
-        keys = extract_blocking_keys(row)
+    # zip is significantly faster and uses less memory than iterrows
+    for ent_id, norm_name, norm_addr in zip(df['entity_id'], df['norm_name'], df['norm_address']):
+        row_fake = {'norm_name': norm_name, 'norm_address': norm_addr}
+        keys = extract_blocking_keys(row_fake)
         for k in keys:
-            records.append({'entity_id': row['entity_id'], 'blocking_key': k})
-    return pd.DataFrame(records)
+            records.append((ent_id, k))
+            
+    keys_df = pd.DataFrame(records, columns=['entity_id', 'blocking_key'])
+    return keys_df
 
 def generate_candidate_pairs(s1: pd.DataFrame, s2: pd.DataFrame, s3: pd.DataFrame) -> pd.DataFrame:
     """
-    Block and generate candidate pairs. 
-    Returns DataFrame matching candidate_pairs.tsv schema.
+    Block and generate candidate pairs using memory-efficient dictionary lookups instead of pd.merge.
     """
-    # Generate keys
-    keys1 = generate_blocking_keys(s1)
+    print("Generating keys for S2 and S3...")
     keys2 = generate_blocking_keys(s2)
     keys3 = generate_blocking_keys(s3)
     
-    # Merge candidates on blocking keys
-    cands_1_2 = pd.merge(keys1, keys2, on='blocking_key', suffixes=('_1', '_cand'))
-    cands_1_3 = pd.merge(keys1, keys3, on='blocking_key', suffixes=('_1', '_cand'))
-    all_cands = pd.concat([cands_1_2, cands_1_3])
+    print("Filtering massive generic blocks...")
+    MAX_FREQ = 100
     
-    # Group by source1_entity_id to get unique candidate lists
-    grouped = all_cands.groupby('entity_id_1')['entity_id_cand'].unique().reset_index()
-    grouped.columns = ['source1_entity_id', 'candidate_entity_ids']
+    counts2 = keys2['blocking_key'].value_counts()
+    valid_k2 = counts2[counts2 <= MAX_FREQ].index
+    keys2 = keys2[keys2['blocking_key'].isin(valid_k2)]
     
-    # Ensure no self-matches (though shouldn't happen cross-source) and format properly
-    grouped['candidate_entity_ids'] = grouped['candidate_entity_ids'].apply(lambda x: ','.join(sorted(list(set(x)))))
+    counts3 = keys3['blocking_key'].value_counts()
+    valid_k3 = counts3[counts3 <= MAX_FREQ].index
+    keys3 = keys3[keys3['blocking_key'].isin(valid_k3)]
     
-    # Ensure all S1 entities exist in output (even singletons)
-    res = pd.DataFrame({'source1_entity_id': s1['entity_id']})
-    res = pd.merge(res, grouped, on='source1_entity_id', how='left')
-    res['candidate_entity_ids'] = res['candidate_entity_ids'].fillna('')
+    print("Building block dictionaries...")
+    # Map blocking_key -> list of entity_ids
+    s2_dict = keys2.groupby('blocking_key')['entity_id'].apply(list).to_dict()
+    s3_dict = keys3.groupby('blocking_key')['entity_id'].apply(list).to_dict()
     
-    return res
+    del keys2, keys3
+    
+    print("Matching S1 to candidates...")
+    results = []
+    
+    for ent_id, norm_name, norm_addr in zip(s1['entity_id'], s1['norm_name'], s1['norm_address']):
+        row_fake = {'norm_name': norm_name, 'norm_address': norm_addr}
+        b_keys = extract_blocking_keys(row_fake)
+        
+        cands = set()
+        for k in b_keys:
+            if k in s2_dict:
+                cands.update(s2_dict[k])
+            if k in s3_dict:
+                cands.update(s3_dict[k])
+                
+        results.append({'source1_entity_id': ent_id, 'candidate_entity_ids': ','.join(sorted(list(cands)))})
+        
+    res_df = pd.DataFrame(results)
+    return res_df
 
 def evaluate_blocking_recall(cands_df: pd.DataFrame, gt_df: pd.DataFrame):
     """
@@ -209,11 +229,11 @@ if __name__ == "__main__":
     # To do the full recall audit, we need the full dataset.
     # s1, s2, s3, gt = load_and_verify_data(DATASET_DIR, prefix='train')
     
-    # We will run a 50,000 row test to establish a baseline recall ceiling
-    s1_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_source1.tsv'), sep='\t', nrows=50000)
-    s2_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_source2.tsv'), sep='\t', nrows=50000)
-    s3_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_source3.tsv'), sep='\t', nrows=50000)
-    gt_test = pd.read_csv(os.path.join(DATASET_DIR, 'train', 'train_ground_truth.tsv'), sep='\t', nrows=50000)
+    # We will run the full validation split to hand off to Person B
+    s1_test = pd.read_csv(os.path.join(DATASET_DIR, 'split', 'val', 'train_source1.tsv'), sep='\t')
+    s2_test = pd.read_csv(os.path.join(DATASET_DIR, 'split', 'val', 'train_source2.tsv'), sep='\t')
+    s3_test = pd.read_csv(os.path.join(DATASET_DIR, 'split', 'val', 'train_source3.tsv'), sep='\t')
+    gt_test = pd.read_csv(os.path.join(DATASET_DIR, 'split', 'val', 'train_ground_truth.tsv'), sep='\t')
     
     print("S1 schema:", s1_test.columns.tolist())
     print("S2 schema:", s2_test.columns.tolist())
@@ -230,4 +250,8 @@ if __name__ == "__main__":
     print("\nEvaluating Blocking Strategy...")
     evaluate_blocking_recall(candidates, gt_test)
     
-    print("\nPipeline check completed successfully.")
+    # Export to output for the matcher to use
+    output_path = "output/candidate_pairs.tsv"
+    os.makedirs("output", exist_ok=True)
+    candidates.to_csv(output_path, sep='\t', index=False)
+    print(f"\nSuccessfully generated {output_path}!")
