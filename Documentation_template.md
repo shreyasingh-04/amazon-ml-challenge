@@ -16,7 +16,19 @@ We utilized a multi-key strategy for high recall against typos and acronyms.
 
 **Candidate Capping (OOM Prevention):**
 Due to the `N x M` explosion on common tokens (e.g., "company"), we applied frequency capping. Any blocking key bucket containing more than 500 entities was dynamically discarded. This successfully kept our average candidate set size under 400 per Source 1 entity without sacrificing rare-token recall.## 2. Feature Engineering
+**Pairwise Similarity Metrics:**
+We utilized `rapidfuzz` for highly optimized C++ string matching to generate features for candidate pairs.
+- **Name Features:** Jaro-Winkler, Token Sort Ratio, Token Set Ratio, and length absolute difference. Token Set Ratio was particularly valuable for handling transposed multi-word DBAs.
+- **Address Features:** Jaro-Winkler, Token Sort Ratio, Token Set Ratio.
+- **Numeric Signals:** We extracted all numeric tokens from addresses (e.g., zip codes, street numbers). A partial or complete mismatch in numeric tokens acts as an extremely strong negative signal.
+- **Country Enforcement:** A direct string match check on the country field to heavily penalize cross-country merges.
 
 ## 3. Matching Model
+**Threshold-Based Heuristic Classifier:**
+To favor the 2x precision weight of the F0.5 metric, we implemented a calibrated rule-based scoring system rather than a black-box ML model. 
+- The final score is a weighted combination of the Name Score (65%) and Address Score (35%).
+- Explicit penalties are applied: Mismatched numeric tokens in addresses subtract 0.35 from the address score. High name length difference combined with high token overlap subtracts 0.15 (to catch parent vs subsidiary entities).
+- The final threshold is strictly set at `0.83` to prevent false merges.
 
 ## 4. Evaluation and Calibration
+Since test labels were unavailable, we wrote a `split_validation.py` script to carve a deterministic 20% validation split from the training dataset. We optimized our Blocking recall ceiling against this set and tuned our `0.83` Matcher threshold to maximize the F0.5 metric on this local holdout.
