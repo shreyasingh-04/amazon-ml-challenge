@@ -69,11 +69,17 @@ def build_dataset(data_dir, candidate_pairs_path, ground_truth_path):
 def train_and_tune(X, y, output_model_path="models/matcher_xgb.pkl"):
     print(f"Training XGBoost on {len(y)} candidate pairs ({sum(y)} positives)...")
     
+    # Handle massive class imbalance (e.g. 1M negatives, 50k positives)
+    num_pos = sum(y)
+    num_neg = len(y) - num_pos
+    scale_weight = (num_neg / num_pos) if num_pos > 0 else 1.0
+
     model = xgb.XGBClassifier(
-        n_estimators=100,
-        max_depth=4,
+        n_estimators=150,
+        max_depth=5,
         learning_rate=0.1,
         random_state=42,
+        scale_pos_weight=scale_weight,
         use_label_encoder=False,
         eval_metric='logloss'
     )
@@ -104,7 +110,10 @@ def train_and_tune(X, y, output_model_path="models/matcher_xgb.pkl"):
             best_f05 = f05
             best_thresh = thresh
             
-    print(f"Best Threshold: {best_thresh:.2f} (F0.5 on training pairs: {best_f05:.4f})")
+    # Final check to see what the model actually predicts at the best threshold
+    final_preds = (probs >= best_thresh).astype(int)
+    print(f"Best Threshold: {best_thresh:.2f} (F0.5: {best_f05:.4f})")
+    print(f"Total Positives Predicted: {sum(final_preds)} out of {len(y)}")
     
     os.makedirs(os.path.dirname(output_model_path), exist_ok=True)
     with open(output_model_path, 'wb') as f:

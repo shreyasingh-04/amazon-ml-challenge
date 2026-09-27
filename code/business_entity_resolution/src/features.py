@@ -1,6 +1,5 @@
 import re
 from rapidfuzz import fuzz
-from rapidfuzz.distance import JaroWinkler
 
 def extract_numbers(text):
     """Extracts all numeric tokens from a string."""
@@ -28,15 +27,17 @@ def compute_features(row_s1, row_s2):
     features = {}
     
     # 1. Name features (Using RapidFuzz for performance and accuracy)
-    features['name_jaro_winkler'] = JaroWinkler.normalized_similarity(name1, name2) if name1 and name2 else 0.0
+    features['name_jaro_winkler'] = fuzz.jaro_winkler(name1, name2) / 100.0 if name1 and name2 else 0.0
     features['name_token_sort'] = fuzz.token_sort_ratio(name1, name2) / 100.0 if name1 and name2 else 0.0
     features['name_token_set'] = fuzz.token_set_ratio(name1, name2) / 100.0 if name1 and name2 else 0.0
+    features['name_partial'] = fuzz.partial_ratio(name1, name2) / 100.0 if name1 and name2 else 0.0
     features['name_len_diff'] = abs(len(name1) - len(name2))
     
     # 2. Address features
-    features['addr_jaro_winkler'] = JaroWinkler.normalized_similarity(addr1, addr2) if addr1 and addr2 else 0.0
+    features['addr_jaro_winkler'] = fuzz.jaro_winkler(addr1, addr2) / 100.0 if addr1 and addr2 else 0.0
     features['addr_token_sort'] = fuzz.token_sort_ratio(addr1, addr2) / 100.0 if addr1 and addr2 else 0.0
     features['addr_token_set'] = fuzz.token_set_ratio(addr1, addr2) / 100.0 if addr1 and addr2 else 0.0
+    features['addr_partial'] = fuzz.partial_ratio(addr1, addr2) / 100.0 if addr1 and addr2 else 0.0
     features['addr_len_diff'] = abs(len(addr1) - len(addr2))
     
     # 3. Numeric-token match for address (strong signal for street numbers/zip codes)
